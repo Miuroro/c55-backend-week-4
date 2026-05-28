@@ -97,6 +97,14 @@ class AnalyticsApiApplicationTests {
 	}
 
 	@Test
+	void replaceRecordThrowsWhenRecordDoesNotExist() {
+		assertThrows(ResourceNotFoundException.class, () -> analyticsService.replaceRecord(
+				"missing",
+				request("2026-05-28T12:00:00Z", "click", "mobile", "sess-2")
+		));
+	}
+
+	@Test
 	void deleteRecordRemovesRecordAndThrowsWhenMissing() {
 		AnalyticsResponse created = analyticsService.createRecord(request(
 				"2026-05-28T10:15:30Z",
@@ -126,6 +134,26 @@ class AnalyticsApiApplicationTests {
 	}
 
 	@Test
+	void getSummaryReturnsZeroesWhenNoRecordsExist() {
+		AnalyticsSummary summary = analyticsService.getSummary();
+
+		assertEquals(0L, summary.getTotalRecords());
+		assertTrue(summary.getTotalsByEventType().isEmpty());
+		assertEquals(0L, summary.getUniqueSessions());
+	}
+
+	@Test
+	void getSummaryIgnoresNullSessionIdsWhenCountingUniqueSessions() {
+		analyticsService.createRecord(request("2026-05-28T08:00:00Z", "page_view", "web", null));
+		analyticsService.createRecord(request("2026-05-28T09:00:00Z", "page_view", "mobile", "sess-1"));
+		analyticsService.createRecord(request("2026-05-28T10:00:00Z", "click", "web", null));
+
+		AnalyticsSummary summary = analyticsService.getSummary();
+
+		assertEquals(1L, summary.getUniqueSessions());
+	}
+
+	@Test
 	void getRecordsRejectsInvalidTimeRange() {
 		IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () ->
 				analyticsService.getRecords(
@@ -150,6 +178,53 @@ class AnalyticsApiApplicationTests {
 		assertEquals(2, allRecords.size());
 		assertFalse(allRecords.get(0).getId().isBlank());
 		assertFalse(allRecords.get(1).getId().isBlank());
+	}
+
+	@Test
+	void getRecordsIncludesValuesEqualToTimeBoundaries() {
+		analyticsService.createRecord(request("2026-05-28T10:00:00Z", "page_view", "web", "sess-1"));
+		analyticsService.createRecord(request("2026-05-28T11:00:00Z", "page_view", "web", "sess-1"));
+		analyticsService.createRecord(request("2026-05-28T12:00:00Z", "page_view", "web", "sess-1"));
+
+		List<AnalyticsResponse> filtered = analyticsService.getRecords(
+				null,
+				null,
+				null,
+				OffsetDateTime.parse("2026-05-28T11:00:00Z"),
+				OffsetDateTime.parse("2026-05-28T12:00:00Z")
+		);
+
+		assertEquals(2, filtered.size());
+		assertEquals(OffsetDateTime.parse("2026-05-28T12:00:00Z"), filtered.get(0).getTimestamp());
+		assertEquals(OffsetDateTime.parse("2026-05-28T11:00:00Z"), filtered.get(1).getTimestamp());
+	}
+
+	@Test
+	void getRecordsTrimsFilterValuesAndTreatsBlankAsNoFilter() {
+		analyticsService.createRecord(request("2026-05-28T08:00:00Z", "page_view", "web", "sess-1"));
+		analyticsService.createRecord(request("2026-05-28T09:00:00Z", "click", "mobile", "sess-2"));
+
+		List<AnalyticsResponse> trimmedMatch = analyticsService.getRecords(" page_view ", " web ", " sess-1 ", null, null);
+		List<AnalyticsResponse> blankFilters = analyticsService.getRecords("   ", "\t", "\n", null, null);
+
+		assertEquals(1, trimmedMatch.size());
+		assertEquals("page_view", trimmedMatch.get(0).getEventType());
+		assertEquals(2, blankFilters.size());
+	}
+
+	@Test
+	void getRecordsOrdersByTimestampDescendingThenIdAscending() {
+		analyticsService.createRecord(request("2026-05-28T10:00:00Z", "page_view", "web", "sess-1"));
+		analyticsService.createRecord(request("2026-05-28T10:00:00Z", "click", "web", "sess-2"));
+		analyticsService.createRecord(request("2026-05-28T09:00:00Z", "purchase", "mobile", "sess-3"));
+
+		List<AnalyticsResponse> allRecords = analyticsService.getRecords(null, null, null, null, null);
+
+		assertEquals(3, allRecords.size());
+		assertEquals(OffsetDateTime.parse("2026-05-28T10:00:00Z"), allRecords.get(0).getTimestamp());
+		assertEquals(OffsetDateTime.parse("2026-05-28T10:00:00Z"), allRecords.get(1).getTimestamp());
+		assertTrue(allRecords.get(0).getId().compareTo(allRecords.get(1).getId()) < 0);
+		assertEquals(OffsetDateTime.parse("2026-05-28T09:00:00Z"), allRecords.get(2).getTimestamp());
 	}
 
 	private AnalyticsRequest request(String timestamp, String eventType, String eventSource, String sessionId) {
