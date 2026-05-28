@@ -1,0 +1,241 @@
+# Analytics API Design
+
+This document defines the REST contract for the Week 4 Analytics API.
+
+## Goals
+
+- Accept privacy-respecting analytics events.
+- Store records in memory.
+- Support listing, filtering, fetching, replacing, deleting, and summarizing records.
+- Keep controllers thin and push business logic into the service layer.
+
+## Base Path
+
+All endpoints are rooted at `/api/v1/analytics`.
+
+## Resource Model
+
+An analytics record contains:
+
+- `id`: server-generated trace ID, immutable string
+- `timestamp`: when the event occurred, ISO-8601 date-time
+- `eventType`: the type of event, non-empty string
+- `eventSource`: the source of the event, non-empty string
+- `sessionId`: anonymized session identifier, non-empty string
+
+## Endpoints
+
+### 1. Create a record
+
+`POST /api/v1/analytics`
+
+Creates a new analytics record. The server generates `id`.
+
+Request body:
+
+```json
+{
+	"timestamp": "2026-05-28T10:15:30Z",
+	"eventType": "page_view",
+	"eventSource": "web",
+	"sessionId": "sess_91f2f1"
+}
+```
+
+Response: `201 Created`
+
+```json
+{
+	"id": "trace_8f2c1b7d3a8a4d7f",
+	"timestamp": "2026-05-28T10:15:30Z",
+	"eventType": "page_view",
+	"eventSource": "web",
+	"sessionId": "sess_91f2f1"
+}
+```
+
+Validation rules:
+
+- `timestamp` is required and must be a valid ISO-8601 date-time.
+- `eventType` is required and must not be blank.
+- `eventSource` is required and must not be blank.
+- `sessionId` is required and must not be blank.
+
+Status codes:
+
+- `201 Created` when stored successfully.
+- `400 Bad Request` when validation fails.
+
+### 2. List and filter records
+
+`GET /api/v1/analytics`
+
+Returns all stored records or a filtered subset.
+
+Supported query parameters:
+
+- `eventType`: filter by event type
+- `eventSource`: filter by event source
+- `sessionId`: filter by anonymized session ID
+- `startTime`: include records at or after this timestamp
+- `endTime`: include records at or before this timestamp
+
+Example:
+
+`GET /api/v1/analytics?eventType=page_view&startTime=2026-05-28T00:00:00Z&endTime=2026-05-28T23:59:59Z`
+
+Response: `200 OK`
+
+```json
+[
+	{
+		"id": "trace_8f2c1b7d3a8a4d7f",
+		"timestamp": "2026-05-28T10:15:30Z",
+		"eventType": "page_view",
+		"eventSource": "web",
+		"sessionId": "sess_91f2f1"
+	}
+]
+```
+
+Validation rules:
+
+- `startTime` and `endTime` must be valid ISO-8601 date-time values when provided.
+- If both are present, `startTime` must be less than or equal to `endTime`.
+
+Status codes:
+
+- `200 OK` for a successful query.
+- `400 Bad Request` for invalid filter values.
+
+### 3. Fetch one record
+
+`GET /api/v1/analytics/{id}`
+
+Returns a single record by server-generated ID.
+
+Response: `200 OK`
+
+```json
+{
+	"id": "trace_8f2c1b7d3a8a4d7f",
+	"timestamp": "2026-05-28T10:15:30Z",
+	"eventType": "page_view",
+	"eventSource": "web",
+	"sessionId": "sess_91f2f1"
+}
+```
+
+Status codes:
+
+- `200 OK` when found.
+- `404 Not Found` when the ID does not exist.
+
+### 4. Replace one record
+
+`PUT /api/v1/analytics/{id}`
+
+Fully replaces an existing record. The path parameter identifies the record to update. The request body supplies the new data.
+
+Request body:
+
+```json
+{
+	"timestamp": "2026-05-28T12:00:00Z",
+	"eventType": "click",
+	"eventSource": "mobile",
+	"sessionId": "sess_91f2f1"
+}
+```
+
+Response: `200 OK`
+
+```json
+{
+	"id": "trace_8f2c1b7d3a8a4d7f",
+	"timestamp": "2026-05-28T12:00:00Z",
+	"eventType": "click",
+	"eventSource": "mobile",
+	"sessionId": "sess_91f2f1"
+}
+```
+
+Rules:
+
+- The `id` is not accepted in the request body.
+- The replacement must satisfy the same validation rules as create.
+
+Status codes:
+
+- `200 OK` when updated.
+- `400 Bad Request` when validation fails.
+- `404 Not Found` when the record does not exist.
+
+### 5. Delete one record
+
+`DELETE /api/v1/analytics/{id}`
+
+Deletes a record by ID.
+
+Status codes:
+
+- `204 No Content` when deleted.
+- `404 Not Found` when the record does not exist.
+
+### 6. Summary
+
+`GET /api/v1/analytics/summary`
+
+Returns a simple analytics summary for the currently stored records.
+
+Response: `200 OK`
+
+```json
+{
+	"totalRecords": 3,
+	"totalsByEventType": {
+		"page_view": 2,
+		"click": 1
+	},
+	"uniqueSessions": 2
+}
+```
+
+Summary rules:
+
+- `totalRecords` is the number of records included in the summary.
+- `totalsByEventType` groups counts by `eventType`.
+- `uniqueSessions` counts distinct anonymized `sessionId` values.
+
+## Error Response Format
+
+All validation and lookup failures should return a consistent JSON error body.
+
+```json
+{
+	"timestamp": "2026-05-28T10:15:30Z",
+	"status": 400,
+	"error": "Bad Request",
+	"message": "timestamp must be a valid ISO-8601 date-time",
+	"path": "/api/v1/analytics"
+}
+```
+
+Common error responses:
+
+- `400 Bad Request` for invalid input or invalid filter ranges.
+- `404 Not Found` for missing records.
+
+## Validation Summary
+
+- Empty or blank `eventType`, `eventSource`, or `sessionId` are rejected.
+- Invalid date-time values are rejected.
+- `startTime` cannot be later than `endTime`.
+- IDs are generated by the server and never accepted from the client on create.
+
+## Notes For Implementation
+
+- Use DTOs for request and response payloads.
+- Keep persistence in memory using a collection such as `Map<String, AnalyticsRecord>`.
+- Put filtering, replacement, deletion, and summary logic in the service layer.
+- Use a global exception handler to keep error responses consistent.
